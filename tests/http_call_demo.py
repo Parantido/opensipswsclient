@@ -14,6 +14,10 @@ import argparse
 import logging
 import sys
 import os
+
+# setting parent directory path
+sys.path.append('../')
+
 from opensips_ws_lib import OpenSIPSClient, SIPMessage, SIPAuthHelper, AudioHandler, SDPGenerator
 
 # Configure logging

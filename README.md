@@ -1,13 +1,13 @@
-# OpenSIPS WebSocket Client
+# OpenSIPS WebSocket Client with ElevenLabs TTS Integration
 
-A Python library for interacting with OpenSIPS via WebSockets. This library provides a pure Python implementation with no external SIP dependencies for establishing WebSocket connections to OpenSIPS servers, handling SIP registration, making calls, and playing audio.
+A Python library for interacting with OpenSIPS via WebSockets with ElevenLabs text-to-speech streaming capabilities. This library provides a pure Python implementation with no external SIP dependencies for establishing WebSocket connections to OpenSIPS servers, handling SIP registration, making calls, and streaming TTS audio.
 
 ## Features
 
 - WebSocket connection to OpenSIPS server
 - SIP registration with digest authentication
 - Making outbound calls
-- Playing audio files to active calls
+- Real-time streaming of ElevenLabs TTS audio to active calls
 - Ending calls
 - Detailed debug logging with configurable levels
 
@@ -18,7 +18,7 @@ A Python library for interacting with OpenSIPS via WebSockets. This library prov
 2. Install the required dependencies:
 
 ```bash
-pip install websockets pyaudio
+pip install websockets pyaudio elevenlabs
 ```
 
 ## Usage
@@ -28,6 +28,7 @@ pip install websockets pyaudio
 ```python
 import asyncio
 from opensips_ws_lib import OpenSIPSClient
+from elevenlabs_streamer import stream_tts_to_call
 
 async def main():
     # Create client instance
@@ -58,8 +59,14 @@ async def main():
     if result["success"]:
         print(f"Call answered! Call-ID: {result['call_id']}")
         
-        # Play audio file
-        await client.play_audio_to_call(result["call_id"], "your_audio.wav")
+        # Stream TTS to the active call
+        await stream_tts_to_call(
+            client=client,
+            call_id=result["call_id"],
+            text="Hello, this is a test message from the AI voice assistant. How are you today?",
+            voice_id="gUbIduqGzBP438teh4ZA",  # Rachel voice
+            optimize_streaming_latency=4
+        )
         
         # Wait for audio to finish
         await asyncio.sleep(10)
@@ -76,19 +83,61 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
+### Voice Bot Demo
+
+A more comprehensive voice bot example is included in `voice_bot_example.py`:
+
+```bash
+python voice_bot_example.py --server wss://your-opensips-server:6061 \
+                           --username your_username \
+                           --password your_password \
+                           --domain your_domain \
+                           --destination destination_extension \
+                           --voice-id gUbIduqGzBP438teh4ZA \
+                           --latency 4 \
+                           --debug-level 2
+```
+
 ### Command Line Client
 
-The library includes a command-line client for testing:
+The library also includes a basic command-line client for testing SIP connections:
 
 ```bash
 python call_client.py --server wss://your-opensips-server:6061 \
-                      --username your_username \
-                      --password your_password \
-                      --domain your_domain \
-                      --destination destination_number \
-                      --audio-file your_audio.wav \
-                      --debug-level 5
+                     --username your_username \
+                     --password your_password \
+                     --domain your_domain \
+                     --destination destination_number \
+                     --audio-file your_audio.wav \
+                     --debug-level 5
 ```
+
+## ElevenLabs Integration
+
+The `ElevenLabsStreamer` class provides functionality to stream audio from ElevenLabs TTS directly to SIP calls:
+
+```python
+from elevenlabs_streamer import ElevenLabsStreamer
+
+# Create the streamer with an active call
+streamer = ElevenLabsStreamer(client, call_id)
+
+# Stream TTS audio
+await streamer.stream_from_elevenlabs(
+    text="This is a test message",
+    voice_id="gUbIduqGzBP438teh4ZA",  # Rachel voice
+    optimize_streaming_latency=4
+)
+
+# Stop streaming when done
+streamer.stop_streaming()
+```
+
+Key features:
+- Real-time streaming from ElevenLabs API
+- RTP packet handling for audio delivery
+- Configurable voice selection and latency optimization
+- Error handling with fallback messages
 
 ## Debug Levels
 
@@ -117,6 +166,19 @@ client = OpenSIPSClient(
 )
 ```
 
+### ElevenLabsStreamer
+
+Handles streaming TTS audio to SIP calls:
+
+```python
+streamer = ElevenLabsStreamer(
+    client=client,  # OpenSIPSClient instance
+    call_id="call_id",  # ID of the active call
+    sample_rate=16000,  # Optional
+    chunk_size=1024     # Optional
+)
+```
+
 ### SIPMessage
 
 Represents a SIP message with methods for parsing and generating SIP messages:
@@ -129,19 +191,6 @@ message = SIPMessage(
     headers={},
     content=""
 )
-```
-
-### AudioHandler
-
-Handles playing audio to SIP calls:
-
-```python
-audio_handler = AudioHandler(
-    local_port=10000,
-    remote_ip="192.168.1.1",
-    remote_port=10000
-)
-audio_handler.play_audio_file("audio.wav")
 ```
 
 ## SIP Authentication
@@ -157,14 +206,15 @@ The library implements SIP digest authentication according to RFC 2617, with sup
 - Python 3.8+
 - websockets library
 - pyaudio library
-- WAV audio files for playing to calls
+- elevenlabs library
+- WAV audio files for playing to calls (for basic functionality)
 
 ## Limitations
 
 - Currently only supports WebSocket transport
-- Audio handling is limited to playing WAV files
+- Basic RTP implementation for audio streaming
 - No support for incoming calls
-- Limited codec support
+- Limited codec support (primarily G.711)
 
 ## License
 
