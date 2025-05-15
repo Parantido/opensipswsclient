@@ -134,9 +134,17 @@ class LLMVoiceBot:
         # Set up ElevenLabs
         try:
             import elevenlabs
-            elevenlabs.set_api_key(self.elevenlabs_api_key)
+            import os
+
+            # Set API key directly - the new method
+            elevenlabs.api_key = self.elevenlabs_api_key
+    
+            # Also set it in environment for other components
+            os.environ["ELEVENLABS_API_KEY"] = self.elevenlabs_api_key
         except ImportError:
             logger.warning("ElevenLabs library not installed")
+        except Exception as e:
+            logger.warning(f"Failed to initialize ElevenLabs: {e}")
         
         # Set up LLM client based on provider
         if self.llm_provider == "openai":
@@ -163,7 +171,7 @@ class LLMVoiceBot:
         logger.info("Starting LLM-powered conversation")
         
         # Initialize TTS with ElevenLabs
-        self.tts = ElevenLabsStreamer(self.client, self.call_id)
+        self.tts = ElevenLabsStreamer(self.client, self.call_id, use_local_audio=False)
         
         # Initialize STT with Deepgram
         self.stt = DeepgramTranscriber(
