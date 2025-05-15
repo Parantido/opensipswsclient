@@ -1,0 +1,34 @@
+# Environment variable configuration file
+# Place this file in one of these locations:
+# - ./.env
+# - ~/.voicebot/.env
+# - /etc/voicebot/.env
+
+# API Keys
+DEEPGRAM_API_KEY=your-deepgram-api-key
+GROQ_API_KEY=your-groq-api-key
+OPENAI_API_KEY=your-openai-api-key
+ELEVENLABS_API_KEY=your-elevenlabs-api-key
+
+# OpenSIPS Settings
+VOICEBOT_OPENSIPS_SERVER=wss://your-opensips-server:6061
+VOICEBOT_OPENSIPS_USERNAME=your-username
+VOICEBOT_OPENSIPS_PASSWORD=your-password
+VOICEBOT_OPENSIPS_DOMAIN=your-domain
+VOICEBOT_OPENSIPS_DEBUG_LEVEL=2
+
+# Voice Settings
+VOICEBOT_ELEVENLABS_VOICE_ID=gUbIduqGzBP438teh4ZA
+VOICEBOT_LATENCY_OPTIMIZATION=4
+
+# Speech Recognition Settings
+VOICEBOT_LANGUAGE=en-US
+VOICEBOT_STT_MODEL=nova-2
+VOICEBOT_SAMPLE_RATE=8000
+VOICEBOT_CHANNELS=1
+
+# Bot Settings
+VOICEBOT_CONVERSATION_TIMEOUT=30
+VOICEBOT_RESPONSE_WAIT_TIME=5
+VOICEBOT_RECORDING_ENABLED=true
+VOICEBOT_LOG_CONVERSATIONS=true

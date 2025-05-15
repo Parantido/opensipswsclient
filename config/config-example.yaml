@@ -1,0 +1,38 @@
+# Sample configuration file for Voice AI Bot
+# Place this file in one of these locations:
+# - ./config.yaml
+# - ~/.voicebot/config.yaml
+# - /etc/voicebot/config.yaml
+
+# API Keys (required for various services)
+DEEPGRAM_API_KEY: "your-deepgram-api-key"
+ELEVENLABS_API_KEY: "your-elevenlabs-api-key"
+GROQ_API_KEY: "your-groq-api-key"
+OPENAI_API_KEY: "your-openai-api-key"
+
+# OpenSIPS Connection Settings
+opensips:
+  server: "wss://your-opensips-server:6061"
+  username: "your-username"
+  password: "your-password"
+  domain: "your-domain"
+  debug_level: 2
+
+# Voice Settings
+voice:
+  elevenlabs_voice_id: "gUbIduqGzBP438teh4ZA"  # Rachel voice
+  latency_optimization: 4
+  
+# STT Settings
+speech_recognition:
+  language: "en-US"
+  model: "nova-2"
+  sample_rate: 8000
+  channels: 1
+
+# Bot Settings
+bot:
+  conversation_timeout: 30
+  response_wait_time: 5
+  recording_enabled: true
+  log_conversations: true

@@ -168,5 +168,8 @@ cython_debug/
 *.mp3
 credentials.json
 config.ini
+config.yml
+config.yaml
+config.json
 settings.local.py
 .DS_Store
