@@ -626,18 +626,27 @@ class OpenSIPSClient:
         if call_id not in self.calls:
             logger.error(f"Cannot end call: Call-ID {call_id} not found")
             return False
-            
+    
         call = self.calls[call_id]
-        
+    
+        # Get via_host and via_port from config, with defaults
+        via_host = "127.0.0.1"
+        via_port = "5060"
+    
+        if hasattr(self, 'config') and self.config:
+            via_host = self.config.get("via_host", via_host)
+            via_port = self.config.get("via_port", via_port)
+    
         # Only send BYE if call was answered
         if call["state"] in ["answered", "established"]:
             branch = self._generate_branch()
-            
+    
             bye_message = SIPMessage(
                 method="BYE",
                 headers={
                     'Request-URI': f"sip:{call['destination']}@{self.domain}",
-                    'Via': f"SIP/2.0/WSS {self.domain};branch=z9hG4bK{branch}",
+                    # Fix: Use proper host:port format instead of domain
+                    'Via': f"SIP/2.0/WSS {via_host}:{via_port};branch=z9hG4bK{branch}",
                     'From': f"<sip:{self.username}@{self.domain}>;tag={call['from_tag']}",
                     'To': f"<sip:{call['destination']}@{self.domain}>;tag={call['to_tag']}",
                     'Call-ID': call_id,
@@ -647,21 +656,22 @@ class OpenSIPSClient:
                     'User-Agent': "Python OpenSIPS WebSocket Client"
                 }
             )
-            
+    
             bye_str = bye_message.to_string()
             logger.debug(f"Sending BYE request:\n{bye_str}", level=5)
-            
+    
             await self.connection.send(bye_str)
             logger.info(f"Sent BYE for call: {call_id}")
         elif call["state"] == "calling" or call["state"] == "ringing":
             # Call is still in progress but not answered, send CANCEL
             branch = call["branch"]
-            
+    
             cancel_message = SIPMessage(
                 method="CANCEL",
                 headers={
                     'Request-URI': f"sip:{call['destination']}@{self.domain}",
-                    'Via': f"SIP/2.0/WSS {self.domain};branch=z9hG4bK{branch}",
+                    # Fix: Use proper host:port format instead of domain
+                    'Via': f"SIP/2.0/WSS {via_host}:{via_port};branch=z9hG4bK{branch}",
                     'From': f"<sip:{self.username}@{self.domain}>;tag={call['from_tag']}",
                     'To': f"<sip:{call['destination']}@{self.domain}>",
                     'Call-ID': call_id,
@@ -670,24 +680,24 @@ class OpenSIPSClient:
                     'User-Agent': "Python OpenSIPS WebSocket Client"
                 }
             )
-            
+    
             cancel_str = cancel_message.to_string()
             logger.debug(f"Sending CANCEL request:\n{cancel_str}", level=5)
-            
+    
             await self.connection.send(cancel_str)
             logger.info(f"Sent CANCEL for call: {call_id}")
-        
+    
         # Stop audio handling if any
         if call_id in self.audio_handlers:
             self.audio_handlers[call_id].stop()
             del self.audio_handlers[call_id]
-            
+    
         # Mark call as ended
         call["state"] = "ended"
         call["ended"] = True
-        
-        return True
     
+        return True
+
     async def play_audio_to_call(self, call_id: str, audio_file: str) -> bool:
         """Play an audio file to an active call"""
         if call_id not in self.calls:
@@ -871,15 +881,26 @@ class OpenSIPSClient:
         """Send ACK for a successful INVITE response"""
         if call_id not in self.calls:
             return
-            
+    
         call = self.calls[call_id]
+    
+        # Set a host and port for the Via header - using a sensible default
+        via_host = "127.0.0.1"
+        via_port = "5060"
+
+        # Check if we have a config with a specific via_host override
+        if hasattr(self, 'config') and self.config:
+            # Try to get via_host from config
+            via_host = self.config.get("via_host", via_host)
+            via_port = self.config.get("via_port", via_port)
         
         # Create ACK request
         ack_message = SIPMessage(
             method="ACK",
             headers={
                 'Request-URI': f"sip:{call['destination']}@{self.domain}",
-                'Via': f"SIP/2.0/WSS {self.domain};branch=z9hG4bK{self._generate_branch()}",
+                # Fix: Use proper host:port format instead of domain
+                'Via': f"SIP/2.0/WSS {via_host}:{via_port};branch=z9hG4bK{self._generate_branch()}",
                 'From': f"<sip:{self.username}@{self.domain}>;tag={call['from_tag']}",
                 'To': f"<sip:{call['destination']}@{self.domain}>;tag={call['to_tag']}",
                 'Call-ID': call_id,
@@ -889,10 +910,10 @@ class OpenSIPSClient:
                 'User-Agent': "Python OpenSIPS WebSocket Client"
             }
         )
-        
+    
         ack_str = ack_message.to_string()
         logger.debug(f"Sending ACK request:\n{ack_str}", level=5)
-        
+    
         await self.connection.send(ack_str)
         logger.info(f"Sent ACK for call: {call_id}")
     
