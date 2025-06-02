@@ -124,28 +124,47 @@ class SIPMessage:
     def to_string(self) -> str:
         """Convert SIPMessage to a string"""
         lines = []
-        
+    
         # First line
         if self.method:
             request_uri = self.headers.get('Request-URI', 'sip:unknown')
             lines.append(f"{self.method} {request_uri} SIP/2.0")
         elif self.status_code:
             lines.append(f"SIP/2.0 {self.status_code} {self.reason or ''}")
-        
-        # Headers
+    
+        # Ensure Content-Length is always present and comes last among headers
+        headers_to_add = {}
+        content_length = "0"
+    
+        # Process headers, excluding Content-Length for now
         for name, value in self.headers.items():
-            # Skip pseudo-header Request-URI
-            if name != 'Request-URI':
-                lines.append(f"{name}: {value}")
-        
-        # Add empty line to separate headers from content
+            if name != 'Request-URI' and name.lower() != 'content-length':
+                headers_to_add[name] = value
+            elif name.lower() == 'content-length':
+                content_length = value
+    
+        # Add all headers except Content-Length
+        for name, value in headers_to_add.items():
+            lines.append(f"{name}: {value}")
+    
+        # Always add Content-Length header (even if 0)
+        lines.append(f"Content-Length: {content_length}")
+    
+        # Add empty line to separate headers from content (MANDATORY in SIP)
         lines.append("")
-        
-        # Content (if any)
-        if self.content:
+    
+        # Content (if any) - but don't add content if Content-Length is 0
+        if self.content and content_length != "0":
             lines.append(self.content)
-        
-        return "\r\n".join(lines)
+    
+        # Join with \r\n and add the mandatory final \r\n
+        message = "\r\n".join(lines)
+    
+        # CRITICAL: Every SIP message must end with an additional \r\n
+        # This adds the final terminating CRLF that's required by the SIP protocol
+        message += "\r\n"
+    
+        return message
 
 class SDPGenerator:
     """Class for generating SDP content for SIP messages"""
@@ -827,24 +846,36 @@ class OpenSIPSClient:
             # 200 OK (Call answered)
             elif response.status_code == 200:
                 logger.info(f"Call {call_id}: Answered")
-                
+            
                 # Extract To tag
                 to_header = response.headers.get('To', '')
                 to_tag_match = re.search(r'tag=([^;>]+)', to_header)
                 if to_tag_match:
                     call["to_tag"] = to_tag_match.group(1)
-                
+            
+                # Extract Contact header for ACK Request-URI
+                contact_header = response.headers.get('Contact', '')
+                if contact_header:
+                    # Extract URI from Contact header (remove < > if present)
+                    contact_match = re.search(r'<([^>]+)>', contact_header)
+                    if contact_match:
+                        call["contact_uri"] = contact_match.group(1)
+                    else:
+                        # Contact might not have < > brackets
+                        call["contact_uri"] = contact_header.split(';')[0].strip()
+                    logger.debug(f"Extracted Contact URI: {call['contact_uri']}", level=4)
+            
                 # Extract SDP answer
                 if response.content:
                     # Parse SDP to get remote media info
                     media_info = SDPGenerator.parse_answer(response.content)
                     call["remote_ip"] = media_info["remote_ip"]
                     call["remote_port"] = media_info["remote_port"]
-                
+            
                 # Update call state
                 call["answered"] = True
                 call["state"] = "answered"
-                
+            
                 # Send ACK
                 await self._send_ack(call_id)
                 
@@ -884,22 +915,23 @@ class OpenSIPSClient:
     
         call = self.calls[call_id]
     
-        # Set a host and port for the Via header - using a sensible default
+        # Get via_host and via_port from config, with defaults
         via_host = "127.0.0.1"
         via_port = "5060"
-
-        # Check if we have a config with a specific via_host override
+    
         if hasattr(self, 'config') and self.config:
-            # Try to get via_host from config
             via_host = self.config.get("via_host", via_host)
             via_port = self.config.get("via_port", via_port)
-        
+    
+        # For ACK, the Request-URI should be the Contact from the 200 OK response
+        # If we have it stored, use it; otherwise fallback to the original destination
+        request_uri = call.get("contact_uri", f"sip:{call['destination']}@{self.domain}")
+    
         # Create ACK request
         ack_message = SIPMessage(
             method="ACK",
             headers={
-                'Request-URI': f"sip:{call['destination']}@{self.domain}",
-                # Fix: Use proper host:port format instead of domain
+                'Request-URI': request_uri,
                 'Via': f"SIP/2.0/WSS {via_host}:{via_port};branch=z9hG4bK{self._generate_branch()}",
                 'From': f"<sip:{self.username}@{self.domain}>;tag={call['from_tag']}",
                 'To': f"<sip:{call['destination']}@{self.domain}>;tag={call['to_tag']}",
@@ -907,36 +939,42 @@ class OpenSIPSClient:
                 'CSeq': "1 ACK",
                 'Contact': f"<sip:{self.username}@{self.domain};transport=ws>",
                 'Max-Forwards': "70",
-                'User-Agent': "Python OpenSIPS WebSocket Client"
+                'User-Agent': "Python OpenSIPS WebSocket Client",
+                'Content-Length': "0"
             }
         )
     
         ack_str = ack_message.to_string()
         logger.debug(f"Sending ACK request:\n{ack_str}", level=5)
     
-        await self.connection.send(ack_str)
-        logger.info(f"Sent ACK for call: {call_id}")
-    
-    async def _send_response(self, request: SIPMessage, status_code: int, reason: str) -> None:
-        """Send a SIP response to a request"""
-        response = SIPMessage(
-            status_code=status_code,
-            reason=reason,
-            headers={
-                'Via': request.headers.get('Via', ''),
-                'From': request.headers.get('From', ''),
-                'To': request.headers.get('To', ''),
-                'Call-ID': request.headers.get('Call-ID', ''),
-                'CSeq': request.headers.get('CSeq', ''),
-                'Contact': f"<sip:{self.username}@{self.domain};transport=ws>",
-                'User-Agent': "Python OpenSIPS WebSocket Client"
-            }
-        )
+        try:
+            await self.connection.send(ack_str)
+            logger.info(f"Sent ACK for call: {call_id}")
+            logger.debug(f"ACK sent successfully for Call-ID: {call_id}", level=3)
+        except Exception as e:
+            logger.error(f"Failed to send ACK for call {call_id}: {e}")
+            raise
         
-        response_str = response.to_string()
-        logger.debug(f"Sending response:\n{response_str}", level=5)
-        
-        await self.connection.send(response_str)
+        async def _send_response(self, request: SIPMessage, status_code: int, reason: str) -> None:
+            """Send a SIP response to a request"""
+            response = SIPMessage(
+                status_code=status_code,
+                reason=reason,
+                headers={
+                    'Via': request.headers.get('Via', ''),
+                    'From': request.headers.get('From', ''),
+                    'To': request.headers.get('To', ''),
+                    'Call-ID': request.headers.get('Call-ID', ''),
+                    'CSeq': request.headers.get('CSeq', ''),
+                    'Contact': f"<sip:{self.username}@{self.domain};transport=ws>",
+                    'User-Agent': "Python OpenSIPS WebSocket Client"
+                }
+            )
+            
+            response_str = response.to_string()
+            logger.debug(f"Sending response:\n{response_str}", level=5)
+            
+            await self.connection.send(response_str)
     
     # Helper methods
     def _generate_branch(self) -> str:
