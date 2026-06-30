@@ -19,6 +19,54 @@ import socket
 import struct
 import random
 
+# ITU-T G.711 u-law encoding table
+_ULAW_BIAS = 0x84
+_ULAW_CLIP = 32635
+
+_ULAW_ENCODE_TABLE = [0] * 256
+
+def _init_ulaw_table():
+    for i in range(256):
+        sign = 0
+        sample = i
+        if sample & 0x80:
+            sign = 0x80
+            sample = 255 - sample
+        sample += _ULAW_BIAS
+        exponent = 7
+        mask = 0x4000
+        while exponent > 0 and not (sample & mask):
+            exponent -= 1
+            mask >>= 1
+        mantissa = (sample >> (exponent + 3)) & 0x0F
+        ulaw_byte = ~(sign | (exponent << 4) | mantissa) & 0xFF
+        _ULAW_ENCODE_TABLE[i] = ulaw_byte
+
+_init_ulaw_table()
+
+
+def _pcm16_to_ulaw(pcm_data: bytes) -> bytes:
+    """Convert 16-bit signed PCM to G.711 u-law."""
+    result = bytearray(len(pcm_data) // 2)
+    for i in range(0, len(pcm_data), 2):
+        sample = int.from_bytes(pcm_data[i:i+2], byteorder='little', signed=True)
+        sign = 0
+        if sample < 0:
+            sign = 0x80
+            sample = -sample
+        if sample > _ULAW_CLIP:
+            sample = _ULAW_CLIP
+        sample += _ULAW_BIAS
+        exponent = 7
+        mask = 0x4000
+        while exponent > 0 and not (sample & mask):
+            exponent -= 1
+            mask >>= 1
+        mantissa = (sample >> (exponent + 3)) & 0x0F
+        result[i // 2] = ~(sign | (exponent << 4) | mantissa) & 0xFF
+    return bytes(result)
+
+
 class ElevenLabsStreamer:
     """
     Class for streaming ElevenLabs TTS audio to SIP calls
@@ -237,79 +285,85 @@ class ElevenLabsStreamer:
             raise Exception(f"Error getting audio from ElevenLabs: {e}")
 
     def _process_audio_stream(self, audio_stream):
-        """Process incoming audio stream and send via RTP"""
-        # For PCM u-law (PCMU, payload type 0)
+        """Process incoming audio stream: downsample and encode to G.711 u-law for RTP."""
+        target_rate = 8000
+        source_rate = self.sample_rate
         payload_type = 0
-    
-        # Process audio chunks
+
+        ratio = source_rate / target_rate if source_rate != target_rate else 1.0
+        pending_pcm = bytearray()
+
         for chunk in audio_stream:
             if not self.is_streaming:
                 break
-    
-            # Process chunk for RTP
-            self._send_audio_chunk_rtp(chunk, payload_type)
-    
-        # Close the stream when done - only if local audio is enabled
+
+            pcm_data = chunk if isinstance(chunk, bytes) else bytes(chunk)
+            if len(pcm_data) < 2:
+                continue
+
+            pending_pcm.extend(pcm_data)
+
+            while len(pending_pcm) >= 2:
+                if ratio > 1:
+                    samples_needed = int(len(pending_pcm) / 2 / ratio)
+                    if samples_needed < 1:
+                        break
+                    downsampled = bytearray()
+                    for i in range(samples_needed):
+                        idx = int(i * ratio) * 2
+                        if idx + 1 < len(pending_pcm):
+                            downsampled.append(pending_pcm[idx])
+                            downsampled.append(pending_pcm[idx + 1])
+                    pending_pcm = pending_pcm[int(samples_needed * ratio) * 2:]
+                    self._send_audio_chunk_rtp(bytes(downsampled), payload_type)
+                else:
+                    frame = bytes(pending_pcm[:2])
+                    pending_pcm = pending_pcm[2:]
+                    self._send_audio_chunk_rtp(frame, payload_type)
+
         if self.use_local_audio and self.stream:
             self.stream.stop_stream()
             self.stream.close()
             self.stream = None
     
     def _send_audio_chunk_rtp(self, chunk, payload_type=0):
-        """Send an audio chunk via RTP"""
+        """Send an audio chunk via RTP with proper G.711 u-law encoding."""
         if not self.rtp_socket or not self.is_streaming:
             return
-            
-        # Convert chunk to PCM if needed
-        # This is simplified - in reality you'd need to convert to the correct format
-        # based on the negotiated codec (usually G.711 u-law or a-law)
-        
-        # Create RTP header
-        # RTP header format:
-        #  0                   1                   2                   3
-        #  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-        # +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-        # |V=2|P|X|  CC   |M|     PT      |       sequence number         |
-        # +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-        # |                           timestamp                           |
-        # +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-        # |           synchronization source (SSRC) identifier            |
-        # +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-        
+
+        pcm_data = chunk if isinstance(chunk, bytes) else bytes(chunk)
+
+        if len(pcm_data) < 2:
+            return
+
+        if len(pcm_data) % 2 != 0:
+            pcm_data = pcm_data[:-1]
+
+        encoded = _pcm16_to_ulaw(pcm_data)
+
         version = 2
         padding = 0
         extension = 0
         cc = 0
         marker = 0
-        
-        # First byte: V=2, P=0, X=0, CC=0
+
         first_byte = (version << 6) | (padding << 5) | (extension << 4) | cc
-        
-        # Second byte: M=0, PT=payload_type
         second_byte = (marker << 7) | payload_type
-        
-        # Create RTP header
-        header = struct.pack('!BBHII', 
-                            first_byte, 
-                            second_byte, 
-                            self.rtp_sequence, 
-                            self.rtp_timestamp, 
+
+        header = struct.pack('!BBHII',
+                            first_byte,
+                            second_byte,
+                            self.rtp_sequence,
+                            self.rtp_timestamp,
                             self.rtp_ssrc)
-        
-        # Increment sequence number (wrap at 16 bits)
+
         self.rtp_sequence = (self.rtp_sequence + 1) & 0xFFFF
-        
-        # Increment timestamp based on samples
-        # For 8kHz audio, increment by 160 samples per 20ms
-        self.rtp_timestamp += len(chunk)
-        
-        # Send RTP packet
+        self.rtp_timestamp += len(encoded)
+
         try:
-            packet = header + chunk
+            packet = header + encoded
             self.rtp_socket.sendto(packet, self.remote_address)
-            
-            # Small delay to control send rate
-            time.sleep(0.020)  # 20ms typical for RTP packets
+            time.sleep(0.020)
         except Exception as e:
             print(f"Error sending RTP packet: {e}")
     
